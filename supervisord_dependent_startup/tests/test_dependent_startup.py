@@ -2,9 +2,12 @@ from __future__ import print_function
 
 import logging
 import os
+import unittest
 
 from parameterized import param, parameterized
+from supervisor.xmlrpc import Faults, xmlrpclib
 
+from .. import supervisord_dependent_startup as plugin
 from . import common, config_utils, DependentStartupError, get_all_configs, ServiceOptions
 from .common import mock, StdinManualEventsWrapper
 from .helpers import LogCapturePrintable
@@ -12,6 +15,44 @@ from .log_utils import plugin_logger_name, plugin_tests_logger_name  # noqa: F40
 from .utils import cprint  # noqa: F401
 
 log = logging.getLogger(plugin_tests_logger_name)
+
+
+class DependentStartupRunTests(unittest.TestCase):
+
+    @parameterized.expand([(None,), (0,), (2,), (4,)])
+    def test_run_ignores_main_return(self, result):
+        with mock.patch.object(plugin, 'main', return_value=result) as main:
+            with LogCapturePrintable() as logs:
+                with self.assertRaises(SystemExit) as raised:
+                    plugin.run()
+        self.assertEqual(0, raised.exception.code)
+        main.assert_called_once_with()
+        logs.check()
+
+    @parameterized.expand([
+        ('shutdown', xmlrpclib.Fault(Faults.SHUTDOWN_STATE, 'SHUTDOWN_STATE'), 0),
+        ('generic_fault', xmlrpclib.Fault(Faults.BAD_NAME, 'bad process name'), 3),
+        ('shutdown_text_only', xmlrpclib.Fault(Faults.BAD_NAME, 'SHUTDOWN_STATE'), 3),
+        ('ordinary_exception', RuntimeError('SHUTDOWN_STATE'), 3),
+        ('system_exit_zero', SystemExit(0), 3),
+        ('system_exit_nonzero', SystemExit(2), 3),
+        ('keyboard_interrupt', KeyboardInterrupt(), 3),
+        ('base_exception', BaseException(), 3),
+    ])
+    def test_run_exception(self, name, error, exit_code):
+        with mock.patch.object(plugin, 'main', side_effect=error) as main:
+            with LogCapturePrintable() as logs:
+                with self.assertRaises(SystemExit) as raised:
+                    plugin.run()
+        self.assertEqual(exit_code, raised.exception.code)
+        main.assert_called_once_with()
+        if exit_code == 0:
+            logs.check()
+        else:
+            logs.check((plugin_logger_name, 'ERROR', 'Error occured:'))
+            self.assertIs(type(error), logs.records[0].exc_info[0])
+            self.assertIs(error, logs.records[0].exc_info[1])
+            self.assertIsNotNone(logs.records[0].exc_info[2])
 
 
 class DependentStartupBasicTests(common.DependentStartupWithoutEventListenerTestsBase):

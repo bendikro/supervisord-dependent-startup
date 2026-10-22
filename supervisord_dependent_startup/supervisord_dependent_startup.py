@@ -19,7 +19,7 @@ from supervisor import childutils, states
 from supervisor.datatypes import boolean, integer
 from supervisor.options import UnhosedConfigParser
 from supervisor.states import RUNNING_STATES
-from supervisor.xmlrpc import xmlrpclib
+from supervisor.xmlrpc import Faults, xmlrpclib
 import toposort
 
 
@@ -908,6 +908,10 @@ def run():
     exit_code = 0
     try:
         main()
+    except xmlrpclib.Fault as error:
+        if error.faultCode != Faults.SHUTDOWN_STATE:
+            log.error("Error occured:", exc_info=sys.exc_info())
+            exit_code = 3
     except:  # noqa: E722
         log.error("Error occured:", exc_info=sys.exc_info())
         exit_code = 3
